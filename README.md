@@ -25,7 +25,7 @@
 - Public Transportation: Smart trolleys can assist commuters by autonomously following them on their way to bus stops or train stations, providing a convenient solution for carrying belongings during the commute.
 
 ### Working
-- Open android application [Smart Trolley](link)
+- Open android application [Smart Trolley](https://github.com/AkramMulani/Smart-Trolley/raw/main/app-debug.apk)
 - Allow the asked permissions for location and bluetooth
 - Click start button to let the trolley follow you
 - After clicking start button a service named Transmit will continueously transmit the current location of user through bluetooth to which trolley is connected
