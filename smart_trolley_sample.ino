@@ -1,213 +1,346 @@
-/**
-* Servo motor : D10
-* IR Sensor   : D11
-* Bluetooth
-          TX  : D0
-          RX  : D1
-* Motors
-          M1  : 1
-          M2  : 2
-          M3  : 3
-          M4  : 4
-*/
-
-
-#include <Servo.h>
-#include <AFMotor.h>
 #include <SoftwareSerial.h>
 #include <TinyGPS++.h>
+#include <AFMotor.h>
+#include <Servo.h>
 
-#define TRIG 3
-#define ECHO 2
-#define IR 11
-#define BT_TX 0
-#define BT_RX 1
-#define GPS_TX 4
-#define GPS_RX 5
+// GPS Pins
+static const int RXPin = A4, TXPin = A5;
+
+// Bluetooth pins
+static const int RXbt = A2, TXbt = A3;
+
+// default baud rate
+static const uint32_t BAUD = 9600;
+
+// Ultrasonic sensor pins
+static const int TRIG=A0, ECHO=A1;
+
+// IR sensor pin
+static const int IR=9;
+
+// Servo pin
+static const int S=10;
+
+// Servo object
+Servo servo;
 
 // The TinyGPS++ object
 TinyGPSPlus gps;
 
-// Servo motor
-Servo myServo;
+// The serial connection to the GPS device
+SoftwareSerial ss(RXPin, TXPin);
 
-// Motors
-AF_DCMotor M1(1), M2(2), M3(3), M4(4);
+// The serial connection to the Bluetooth device
+SoftwareSerial bt(RXbt, TXbt);
 
-/**
-Bluetooth Module HC-05
-TX = A4, RX = A5
-*/
-SoftwareSerial bluetooth(BT_RX,BT_TX);
-/**
-GPS Module NEO-6M
-TX = A2, RX = A3
-*/
-SoftwareSerial gpsSerial(GPS_RX,GPS_TX);
+// motor 1
+AF_DCMotor M1(1);
 
-// DIRECTIONS
-bool RIGHT_DIRECTION=false, LEFT_DIRECTION=false, MOVE=false;
+// motor 2
+AF_DCMotor M2(2);
 
-// Setup all the requirenments
-void setup() {
-  // put your setup code here, to run once:
-  Serial.begin(9600);
-  bluetooth.begin(9600); // Set Bluetooth communication baud rate
-  gpsSerial.begin(9600); // Set GPS baud rate
+// motor 3
+AF_DCMotor M3(3);
 
+// motor 4
+AF_DCMotor M4(4);
+
+// movement flags
+bool FRONT=false, BACK=false, RIGHT=false, LEFT=false;
+
+// user location
+double lat=0,lng=0;
+
+// trolley location
+double Tlat=0,Tlng=0;
+
+// Previous trolley location variables
+double prevTlat = 0.0, prevTlng = 0.0;
+
+// setup all the things first
+void setup(){
+  pinMode(TRIG, OUTPUT); // Sets the trigPin as an Output
+  pinMode(ECHO, INPUT); // Sets the echoPin as an Input
   pinMode(IR, INPUT);
-
-  Serial.println("Welcome to smart trolley project..........");
-  Serial.println("Smart trolley started........");
-  myServo.attach(10);
-  myServo.write(90);
+  servo.attach(S);
+  servo.write(90);
+  Serial.begin(BAUD);
+  ss.begin(BAUD);
+  bt.begin(BAUD);
+  Serial.println("Welcome to smart trolley....");
 }
-/**
-* Function to run continuously
-*/
-void loop() {
 
-  // looking for the direction
-  if (MOVE) lookForDirection();
-  else myServo.write(90);
-
-  // printing direction
-  Serial.println(RIGHT_DIRECTION?"Turn Right":LEFT_DIRECTION?"Turn Left":MOVE?"Moving Straight":"Looking for direction");
-  delay(100);
-
-  // move trolley accordingly
-  if (RIGHT_DIRECTION) {
-    highSpeed();
-    // turn right
-    moveLeft(0);
-    moveRight(1);
-  }
-  else if (LEFT_DIRECTION) {
-    highSpeed();
-    // turn left
-    moveRight(0);
-    moveLeft(1);
-  }
-  else if (MOVE) {
-    normalSpeed();
-    // move forward
-    moveLeft(0);
-    moveRight(0);
-  }
-  else {
-    // stop motors
-    stopMotors();
-  }
-
-}
-/**
-* To recognise obstacle in path
-* - returns int
-*/
-int getIR() {
-  int val = digitalRead(IR);
-  Serial.print("IR: ");
-  Serial.print(val);
-  Serial.println(val==HIGH?" - HIGH":" - LOW");
-  return val;
-}
-/**
-* Looks right and left for the direction and sets flags of direction
-* - RIGHT_DIRECTION: Flag to turn right
-* - LEFT_DIRECTION: Flag to turn left
-* - MOVE: Flag to move forward
-*/
-void lookForDirection() {
-  int i;
-  // LOOK RIGHT
-  for (i=90;i>=0;i--) { myServo.write(i); delay(10); }
-  RIGHT_DIRECTION = getIR()==LOW;
-  delay(100);
+// continuously runs like loop
+void loop(){
+  // This sketch displays information every time a new sentence is correctly encoded.
+  String data = "";
+  setUserLocation();
+  setTrolleyLocation();
   
-  // LOOK LEFT
-  for (i=0;i<=180;i++) { myServo.write(i); delay(10); }
-  LEFT_DIRECTION = getIR()==LOW;
-  delay(100);
+  while (ss.available()>0 && bt.available()>0) {
+    followUser();
+  }
+  
+}
 
-  // LOOK STRAIGHT
-  for (i=180;i>=90;i--) { myServo.write(i); delay(10); }
-  MOVE = getIR()==LOW && !RIGHT_DIRECTION && !LEFT_DIRECTION;
-  delay(100);
+// Function to calculate the distance between two GPS coordinates
+double calculateDistance(double lat1, double lng1, double lat2, double lng2) {
+  // Earth's radius in kilometers
+  const double R = 6371;
+  double dLat = radians(lat2 - lat1);
+  double dLon = radians(lng2 - lng1);
+  double a = sin(dLat / 2) * sin(dLat / 2) + cos(radians(lat1)) * cos(radians(lat2))
+            * sin(dLon / 2) * sin(dLon / 2);
+  double c = 2 * atan2(sqrt(a), sqrt(1 - a));
+  return R * c;
 }
-/**
-* Set the speed of motors to 150 (NORMAL)
-*/
-void normalSpeed() {
-  M1.setSpeed(150);
-  M2.setSpeed(150);
-  M3.setSpeed(150);
-  M4.setSpeed(150);
+
+// Function to follow the user
+void followUser() {
+  double userDistance = calculateDistance(Tlat, Tlng, lat, lng);
+  
+  if (userDistance < 1.0) { // User is within 1 meter, stop the trolley
+    stopAllMotors();
+    return;
+  }
+
+  // Calculate the direction difference between user and trolley
+  double userDirection = atan2(lat - Tlat, lng - Tlng);
+
+  // Calculate the estimated trolley direction based on recent movement
+  double trolleyDirection = getTrolleyDirection();
+
+  // Adjust for directional wraparound (0 to 360 degrees)
+  if (userDirection > M_PI) {
+    userDirection -= 2.0 * M_PI;
+  } else if (userDirection < -M_PI) {
+    userDirection += 2.0 * M_PI;
+  }
+  if (trolleyDirection > M_PI) {
+    trolleyDirection -= 2.0 * M_PI;
+  } else if (trolleyDirection < -M_PI) {
+    trolleyDirection += 2.0 * M_PI;
+  }
+
+  // Calculate the direction difference to adjust
+  double directionDiff = userDirection - trolleyDirection;
+
+  // Decide on movement based on direction difference
+  if (abs(directionDiff) < 0.1) { // User is directly in front, move forward
+    runAllForward();
+    while(true) {
+      long d = getDistance();
+      if (d<=20) {
+        stopAllMotors();
+        checkMovement();
+        if (FRONT) { runAllForward(); break; }
+        else if (RIGHT) { turnRight(); break; }
+        else if (LEFT) { turnLeft(); break; }
+      }
+    }
+  } else if (directionDiff > 0.1) { // User is to the right, turn right slightly
+    stopAllMotors();
+    delay(100);
+    turnRight();
+    delay(500); // Adjust delay for smoother turning
+  } else if (directionDiff < -0.1) { // User is to the left, turn left slightly
+    stopAllMotors();
+    delay(100);
+    turnLeft();
+    delay(500);
+  }
 }
-/**
-* Set the speed of motors to 250 (HIGH)
-*/
-void highSpeed() {
-  M1.setSpeed(250);
-  M2.setSpeed(250);
-  M3.setSpeed(250);
-  M4.setSpeed(250);
+
+// Function to estimate trolley direction based on recent movement
+double getTrolleyDirection() {
+  // Check if there's a valid previous location
+  if (prevTlat == 0.0 || prevTlng == 0.0) {
+    return 0.0; // No previous data, return neutral direction
+  }
+
+  // Calculate the direction difference based on displacement between current and previous locations
+  double deltaX = Tlng - prevTlng;
+  double deltaY = Tlat;
 }
-/**
-* Moves the wheels of left side of trolley in either FORWARD or BACKWARD direction according to the parameter dir
-* -dir - specify the direction of the wheels [0: forward direction, 1: backward direction]
-*/
-void moveLeft(int dir) {
-  M2.run(dir==0?FORWARD:BACKWARD);
-  M4.run(dir==0?FORWARD:BACKWARD);
+
+// ultrasonic sensor's returned distance value
+int getDistance() {
+  // defines variables
+  long duration;
+  int distance;
+  // Clears the trigPin
+  digitalWrite(TRIG, LOW);
+  delayMicroseconds(2);
+  // Sets the trigPin on HIGH state for 10 micro seconds
+  digitalWrite(TRIG, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG, LOW);
+  // Reads the echoPin, returns the sound wave travel time in microseconds
+  duration = pulseIn(ECHO, HIGH);
+  // Calculating the distance
+  distance = duration * 0.034 / 2;
+  Serial.print("Distance: ");
+  Serial.print(distance);
+  Serial.println(" cm");
+  return distance;
 }
-/**
-* Moves the wheels of right side of trolley in either FORWARD or BACKWARD direction according to the parameter dir
-* -dir - specify the direction of the wheels [0: forward direction, 1: backward direction]
-*/
-void moveRight(int dir) {
-  M1.run(dir==0?FORWARD:BACKWARD);
-  M3.run(dir==0?FORWARD:BACKWARD);  
+
+// IR sensor's returned boolean value
+bool getIR() {
+  int i = digitalRead(IR);
+  Serial.println(i==LOW?"IR LOW":"IR HIGH");
+  return i==LOW;
 }
-/**
-* Stops all wheels of trolley
-*/
-void stopMotors() {
+
+// find user location
+void setUserLocation() {
+  if (bt.available()>0) {
+    String location = bt.readStringUntil('\n');
+    for (int i;i<location.length()-1;i++) {
+      if (location.substring(i)==',') {
+        lat = atof(location.substring(0, i).c_str());
+        lng = atof(location.substring(i+1, location.length()-1).c_str());
+      }
+    }
+  }
+}
+
+// find trolley location
+void setTrolleyLocation() {
+  if (ss.available() > 0){
+    gps.encode(ss.read());
+    if (gps.location.isUpdated()){
+      Tlat = gps.location.lat();
+      Tlng = gps.location.lng();
+      Serial.print("Latitude= "); 
+      Serial.print(lat, 6);
+      Serial.print(" Longitude= "); 
+      Serial.println(lng, 6);
+    }
+  }
+}
+
+// run all motors forward
+void runAllForward() {
+  M1.run(FORWARD);
+  M2.run(FORWARD);
+  M3.run(FORWARD);
+  M4.run(FORWARD);
+}
+
+// run all motors backward
+void runAllBackward() {
+  M1.run(BACKWARD);
+  M2.run(BACKWARD);
+  M3.run(BACKWARD);
+  M4.run(BACKWARD);
+}
+
+// stop all the motors
+void stopAllMotors() {
   M1.run(RELEASE);
   M2.run(RELEASE);
   M3.run(RELEASE);
   M4.run(RELEASE);
 }
 
-/**Send the message via bluetooth*/
-void sendBluetoothMessage(const char* message) {
-  bluetooth.println(message);
+// set speed 255
+void setMaxSpeed() {
+  M1.setSpeed(255);
+  M2.setSpeed(255);
+  M3.setSpeed(255);
+  M4.setSpeed(255);
 }
 
-/**Receive the message via bluetooth*/
-String receiveBluetoothMessage() {
-  // format = latidute,longitude
-  String msg="";
-  if (bluetooth.available()) {
-    Serial.println("Message received from Bluetooth: ");
-    while (bluetooth.available()) {
-      msg = bluetooth.readString();
-      Serial.print(msg);
-    }
-    Serial.println();
-  }
-  return msg;
+// set speed 155
+void setNormalSpeed() {
+  M1.setSpeed(155);
+  M2.setSpeed(155);
+  M3.setSpeed(155);
+  M4.setSpeed(155);
 }
 
-/**Get location coordinates in Longitude and Latitude format*/
-TinyGPSPlus getLongitudeLatitude() {
-  String latitude = "";
-  String longitude = "";
-  if (gpsSerial.available()>0) {
-    gps.encode(gpsSerial.read());
-    if (gps.location.isUpdated()) {
-      latitude = gps.location.lat();
-      longitude = gps.location.lng();
-    }
+// command to turn left
+void turnLeft() {
+  setMaxSpeed();
+  M1.run(BACKWARD);
+  M2.run(BACKWARD);
+  M3.run(FORWARD);
+  M4.run(FORWARD);
+  delay(2000);
+  stopAllMotors();
+  LEFT = false;
+}
+
+// command to turn right
+void turnRight() {
+  setMaxSpeed();
+  M1.run(BACKWARD);
+  M2.run(BACKWARD);
+  M3.run(FORWARD);
+  M4.run(FORWARD);
+  delay(2000);
+  stopAllMotors();
+  RIGHT = false;
+}
+
+// command turn around
+void turnBack() {
+  setMaxSpeed();
+  M1.run(FORWARD);
+  M2.run(FORWARD);
+  M3.run(BACKWARD);
+  M4.run(BACKWARD);
+  delay(4000);
+  stopAllMotors();
+  BACK = false;
+}
+
+// checking for movement
+void checkMovement() {
+  int R_DIST, L_DIST;
+  int i;
+  delay(100);
+  if (getDistance()>=30) {
+    FRONT = true;
+    BACK = false;
+    RIGHT = false;
+    LEFT = false;
+    return;
   }
-  return gps;
+  for (i=90;i>0;i--) {
+    servo.write(i);
+    delay(10);
+  }
+  R_DIST = getDistance();
+  delay(100);
+  for (i=0;i<180;i++) {
+    servo.write(i);
+    delay(10);
+  }
+  L_DIST = getDistance();
+  delay(100);
+  for (i=180;i>=90;i--) {
+    servo.write(i);
+    delay(10);
+  }
+  delay(100);
+  if (R_DIST>L_DIST && R_DIST >= 30) {
+    RIGHT = true;
+    LEFT = false;
+    FRONT = false;
+    BACK = false;
+  }
+  else if (L_DIST>R_DIST && L_DIST >= 30) {
+    LEFT = true;
+    RIGHT = false;
+    FRONT = false;
+    BACK = false;
+  }
+  else if (L_DIST<30 && R_DIST<30) {
+    BACK = true;
+    FRONT = false;
+    RIGHT = false;
+    LEFT = false;
+  }
 }
